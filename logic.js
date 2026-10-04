@@ -72,9 +72,11 @@ function valutaUO(totale, linea, sel, finito) {
  * Esiti possibili:
  *  attesa (non iniziata) · ok (in corso, sta vincendo) · ko (in corso, sta perdendo)
  *  vinto · perso · nullo (rimborsato) · verifica (rinviata/sospesa o dato mancante)
+ *  manuale (partita non seguita in automatico, esito da segnare a mano)
  */
 export function valuta(ev) {
   if (ev.esitoManuale) return ev.esitoManuale;
+  if (!ev.fixtureId) return 'manuale';      // partita non trovata su API-Football: esito da segnare a mano
   const L = ev.live;
   if (!L || ATTESA.has(L.status)) return 'attesa';
   if (ANOMALI.has(L.status)) return 'verifica';
@@ -125,6 +127,7 @@ export function statoSchedina(s) {
   const prodotto = validi.reduce((p, e) => p * (Number(e.quota) || 1), 1);
   const haNulli = validi.length < s.eventi.length;
   // La quota totale inserita a mano (es. con bonus) vale solo se non ci sono eventi annullati
+  // La quota della schedina (quella del bookmaker, bonus compreso) vale finché non ci sono eventi annullati
   const quota = (!haNulli && Number(s.quotaTotale)) ? Number(s.quotaTotale) : prodotto;
   const vincitaPotenziale = +(puntata * quota).toFixed(2);
 
@@ -135,7 +138,9 @@ export function statoSchedina(s) {
   else stato = 'aperta';
 
   const vincita = stato === 'vinta' ? vincitaPotenziale : 0;
-  return { stato, esiti, quota: +quota.toFixed(2), vincitaPotenziale, vincita, chiusa: stato === 'vinta' || stato === 'persa' };
+  const conta = (...k) => esiti.filter(e => k.includes(e)).length;
+  const riepilogo = { vinti: conta('vinto'), persi: conta('perso'), inCorso: conta('ok', 'ko'), attesa: conta('attesa'), gialli: conta('manuale', 'verifica'), nulli: conta('nullo') };
+  return { stato, esiti, riepilogo, quota: +quota.toFixed(2), vincitaPotenziale, vincita, chiusa: stato === 'vinta' || stato === 'persa' };
 }
 
 /** Statistiche per la pagina Storico (solo schedine chiuse). */

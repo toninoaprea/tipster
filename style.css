@@ -150,3 +150,16 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 .imp-merc { display: grid; grid-template-columns: 1.4fr 1fr .7fr .8fr; gap: 6px; margin-top: 6px; }
 .imp-merc:has(> :nth-child(3):last-child) { grid-template-columns: 1.4fr 1fr .8fr; }
 select.warn { border-color: var(--warn); }
+
+/* Eventi da segnare a mano (giallo) e riepilogo schedina */
+.ev.manuale { border-left-color: var(--warn); background: var(--warn-soft); }
+.ev.manuale .esito { color: var(--warn); }
+.ev.manuale .extra { color: var(--warn); }
+.riepilogo { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+.riepilogo:empty { display: none; }
+.chip { display: inline-block; font: 700 13px/1 var(--font-num); text-transform: uppercase; letter-spacing: .4px; padding: 4px 8px; border-radius: 6px; background: var(--panel-2); color: var(--muted); }
+.chip.vinto { background: var(--win-soft); color: var(--win); }
+.chip.perso { background: var(--lose-soft); color: var(--lose); }
+.chip.live { color: var(--text); }
+.chip.giallo { background: var(--warn-soft); color: var(--warn); }
+.imp.amano { border-left: 3px solid var(--warn); padding-left: 8px; }

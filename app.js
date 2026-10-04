@@ -36,6 +36,15 @@ const num = (n, d = 2) => (Number(n) || 0).toLocaleString('it-IT', { minimumFrac
 function oggi() { return new Date().toLocaleDateString('sv-SE', { timeZone: TZ }); }
 const ora = (iso) => new Date(iso).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', timeZone: TZ });
 const giorno = (iso) => new Date(iso).toLocaleDateString('it-IT', { day: '2-digit', month: 'short', timeZone: TZ });
+// "2026-10-04" + "13:00" (ora italiana) -> ISO con il fuso giusto (legale o solare)
+function isoRoma(data, hhmm) {
+  const d = data || oggi(), h = /^\d{1,2}:\d{2}$/.test(hhmm || '') ? hhmm.padStart(5, '0') : '12:00';
+  for (const off of ['+02:00', '+01:00']) {
+    const iso = `${d}T${h}:00${off}`;
+    if (ora(iso) === h) return iso;
+  }
+  return `${d}T${h}:00+01:00`;
+}
 
 function toast(msg, err = false) {
   const t = $('#toast'); t.textContent = msg; t.className = 'toast' + (err ? ' err' : '');
@@ -135,7 +144,7 @@ function partiteDaAggiornare() {
   for (const s of S.schedine) {
     if (statoSchedina(s).chiusa) continue;           // schedina già decisa: niente richieste
     for (const ev of s.eventi) {
-      if (ev.esitoManuale || ev.live?.finito) continue;
+      if (!ev.fixtureId || ev.esitoManuale || ev.live?.finito) continue;
       if (ev.live && ANOMALI.has(ev.live.status)) continue;
       if (new Date(ev.kickoff).getTime() > adesso + 60e3) continue; // non ancora iniziata
       ids.add(ev.fixtureId);
@@ -240,7 +249,7 @@ function render() {
 }
 
 /* ---------- vista LIVE ---------- */
-const TESTO_ESITO = { attesa: '—', ok: 'Ok', ko: 'No', vinto: 'Vinto', perso: 'Perso', nullo: 'Nullo', verifica: 'Verifica' };
+const TESTO_ESITO = { attesa: '—', ok: 'Ok', ko: 'No', vinto: 'Vinto', perso: 'Perso', nullo: 'Nullo', verifica: 'Verifica', manuale: 'A mano' };
 
 function orologio(ev) {
   const L = ev.live;
@@ -261,6 +270,7 @@ function rigaEvento(s, ev, i, esito) {
   if (L && ev.mercato === 'CORNER') extra = `Corner: ${L.hasStats ? L.corners : 'n.d.'}`;
   if (L && ev.mercato === 'MARC' && L.marcatori?.length) extra = 'Gol: ' + L.marcatori.map(m => esc(m.name)).join(', ');
   if (L && (L.status === 'AET' || L.status === 'PEN' || L.status === 'ET')) extra += (extra ? ' · ' : '') + `Dopo i supplementari ${L.golTotali.h}–${L.golTotali.a}`;
+  if (!ev.fixtureId) extra = 'Partita non seguita in automatico: tocca per segnare l\'esito';
   const testo = ev.mercato === 'MARC' && esito === 'ko' ? 'Non ancora' : TESTO_ESITO[esito];
   return `<div class="ev ${esito}" data-act="evento" data-s="${s.id}" data-i="${i}">
     ${orologio(ev)}
@@ -269,7 +279,7 @@ function rigaEvento(s, ev, i, esito) {
       <div class="sel"><b>${esc(etichettaSelezione(ev))}</b>${ev.quota ? ' @ ' + num(ev.quota) : ''}</div>
       ${extra ? `<div class="extra">${extra}</div>` : ''}
     </div>
-    <div class="esito">${testo}${ev.esitoManuale ? '<span class="man">manuale</span>' : ''}</div>
+    <div class="esito">${testo}${ev.esitoManuale ? `<span class="man">${ev.fixtureId ? 'corretto a mano' : 'segnato a mano'}</span>` : ''}</div>
   </div>`;
 }
 
@@ -277,11 +287,15 @@ function cardSchedina(s) {
   const r = statoSchedina(s);
   const cls = r.stato.replace(' ', '-');
   const data = new Date(s.createdAtMs).toLocaleDateString('it-IT', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-  const vivi = r.esiti.filter(e => e !== 'perso').length;
+  const R = r.riepilogo;
+  const chip = (n, cls, t) => n ? `<span class="chip ${cls}">${n} ${t}</span>` : '';
   return `<div class="card">
     <div class="card-head">
-      <div><span class="badge ${cls}">${r.stato}</span> <span class="meta">${data} · ${s.eventi.length} eventi${r.stato === 'in corso' || r.stato === 'aperta' ? ` · ${r.esiti.filter(e => e === 'vinto').length} già vinti` : ''}</span></div>
+      <div><span class="badge ${cls}">${r.stato}</span> <span class="meta">${data} · ${s.eventi.length} eventi</span></div>
       <button class="x" data-act="menu-schedina" data-s="${s.id}" aria-label="Opzioni">⋯</button>
+    </div>
+    <div class="riepilogo">
+      ${chip(R.vinti, 'vinto', R.vinti === 1 ? 'vinto' : 'vinti')}${chip(R.persi, 'perso', R.persi === 1 ? 'perso' : 'persi')}${chip(R.inCorso, 'live', 'in corso')}${chip(R.attesa, '', 'da iniziare')}${chip(R.gialli, 'giallo', 'da verificare')}${chip(R.nulli, '', R.nulli === 1 ? 'nullo' : 'nulli')}
     </div>
     ${s.eventi.map((ev, i) => rigaEvento(s, ev, i, r.esiti[i])).join('')}
     <div class="card-foot">
@@ -338,7 +352,7 @@ function renderNuova() {
     ${D.eventi.length ? `<div class="draft">
       <h2 style="margin-top:0">La tua schedina</h2>
       ${D.eventi.map((e, i) => `<div class="draft-ev">
-        <div><div>${esc(e.home)} – ${esc(e.away)}</div><div class="muted small">${esc(etichettaSelezione(e))}${e.quota ? ' @ ' + num(e.quota) : ''} · ${giorno(e.kickoff)} ${ora(e.kickoff)}</div></div>
+        <div><div>${esc(e.home)} – ${esc(e.away)}${e.fixtureId ? '' : ' <span class="chip giallo">a mano</span>'}</div><div class="muted small">${esc(etichettaSelezione(e))}${e.quota ? ' @ ' + num(e.quota) : ''} · ${giorno(e.kickoff)} ${ora(e.kickoff)}</div></div>
         <button class="x" data-act="rimuovi" data-i="${i}" aria-label="Rimuovi">✕</button></div>`).join('')}
       <div class="totali">
         <div><label>Puntata €</label><input id="d-puntata" type="number" inputmode="decimal" min="0" step="0.5" value="${esc(D.puntata)}"></div>
@@ -414,7 +428,8 @@ async function importaScreenshot(file) {
       const sicura = top && top.punti >= SOGLIA_SICURA && margine >= 0.06;
       return {
         letto: e, cand,
-        scelta: top && top.punti >= SOGLIA_MINIMA ? top.partita.id : '',
+        scelta: top && top.punti >= SOGLIA_MINIMA ? top.partita.id : 'mano',
+        data: g,
         livello: !top || top.punti < SOGLIA_MINIMA ? 'no' : sicura ? 'ok' : 'dubbio',
         mercato: e.mercato || 'UO', sel: e.sel || (e.mercato === '1X2' ? '1' : e.mercato === 'DC' ? '1X' : e.mercato === 'GGNG' ? 'GG' : 'O'),
         linea: e.linea ?? 2.5, quota: e.quota ?? '', giocatore: e.giocatore || '',
@@ -436,21 +451,24 @@ function revisioneImport(letto, righe) {
 
   const disegna = () => {
     const daImportare = righe.filter(r => r.scelta !== '').length;
-    const dubbi = righe.filter(r => r.scelta !== '' && (r.livello !== 'ok' || r.mercatoDubbio)).length;
+    const aMano = righe.filter(r => r.scelta === 'mano').length;
+    const dubbi = righe.filter(r => r.scelta !== '' && r.scelta !== 'mano' && (r.livello !== 'ok' || r.mercatoDubbio)).length;
     $('#modal-box').innerHTML = `
       <div class="row" style="justify-content:space-between"><h2 style="margin:0">Controlla la schedina</h2><button class="x" data-r="chiudi">✕</button></div>
       <p class="muted small">Letti ${righe.length} eventi${letto.puntata ? ` · puntata ${euro(letto.puntata)}` : ''}${letto.quotaTotale ? ` · quota ${num(letto.quotaTotale)}` : ''}.
         ${dubbi ? `<b style="color:var(--warn)">${dubbi} da controllare</b> (segnati con ?). ` : ''}
-        ${righe.length - daImportare ? `<b class="neg">${righe.length - daImportare} non trovate</b>, verranno saltate.` : ''}
-        ${!dubbi && daImportare === righe.length ? 'Tutto abbinato.' : ''}</p>
+        ${aMano ? `<b style="color:var(--warn)">${aMano} non trovate</b>: restano nella schedina in giallo e l'esito lo segni tu. ` : ''}
+        ${righe.length - daImportare ? `${righe.length - daImportare} eliminate. ` : ''}
+        ${!dubbi && !aMano && daImportare === righe.length ? 'Tutto abbinato.' : ''}</p>
       ${righe.map((r, i) => `
-        <div class="imp ${r.scelta === '' ? 'saltato' : ''}">
-          <div class="imp-top">${icona[r.scelta === '' ? 'no' : r.livello]}
+        <div class="imp ${r.scelta === '' ? 'saltato' : r.scelta === 'mano' ? 'amano' : ''}">
+          <div class="imp-top">${r.scelta === 'mano' ? icona.dubbio.replace('?', '✋') : icona[r.scelta === '' ? 'no' : r.livello]}
             <div class="grow"><b>${esc(r.letto.casa)} – ${esc(r.letto.ospite)}</b><div class="muted small">Sisal · ${esc(r.letto.ora || '?')}</div></div>
           </div>
           <select data-r="scelta" data-i="${i}">
             ${r.cand.filter(c => c.punti > 0.25).map(c => `<option value="${c.partita.id}" ${c.partita.id === r.scelta ? 'selected' : ''}>${ora(c.partita.kickoff)} ${esc(c.partita.home)} – ${esc(c.partita.away)} (${esc(c.partita.league)})</option>`).join('')}
-            <option value="" ${r.scelta === '' ? 'selected' : ''}>— Non trovata: salta questo evento</option>
+            <option value="mano" ${r.scelta === 'mano' ? 'selected' : ''}>✋ Non trovata: la tengo e la segno io a mano</option>
+            <option value="" ${r.scelta === '' ? 'selected' : ''}>✕ Elimina (letta male, non è nella schedina)</option>
           </select>
           <div class="imp-merc">
             <select data-r="mercato" data-i="${i}" class="${r.mercatoDubbio ? 'warn' : ''}">${Object.entries(MERCATI).map(([k, m]) => `<option value="${k}" ${k === r.mercato ? 'selected' : ''}>${m.nome}</option>`).join('')}</select>
@@ -462,7 +480,7 @@ function revisioneImport(letto, righe) {
           </div>
         </div>`).join('')}
       <button class="btn primary block" data-r="importa" style="margin-top:14px" ${daImportare ? '' : 'disabled'}>Metti ${daImportare} eventi nella schedina</button>
-      <p class="muted small">Se una partita manca nell'elenco, saltala e aggiungila a mano dalla lista delle partite.</p>`;
+      <p class="muted small">Le partite tenute "a mano" non consumano richieste API: quando finiscono le tocchi e scegli Vinto, Perso o Nullo.</p>`;
   };
 
   $('#modal-box').onclick = (e) => {
@@ -472,7 +490,9 @@ function revisioneImport(letto, righe) {
       const eventi = [];
       for (const r of righe) {
         if (r.scelta === '') continue;
-        const p = r.cand.find(c => c.partita.id === r.scelta).partita;
+        const p = r.scelta === 'mano'
+          ? { id: null, kickoff: isoRoma(r.data, r.letto.ora), league: '', home: r.letto.casa || '?', away: r.letto.ospite || '?', homeId: null, awayId: null }
+          : r.cand.find(c => c.partita.id === r.scelta).partita;
         const ev = {
           fixtureId: p.id, kickoff: p.kickoff, league: p.league, home: p.home, away: p.away, homeId: p.homeId, awayId: p.awayId,
           mercato: r.mercato, sel: r.mercato === 'MARC' ? null : r.sel, quota: r.quota ? Number(r.quota) : null, live: null, esitoManuale: null,
@@ -485,8 +505,8 @@ function revisioneImport(letto, righe) {
       const vuota = !D.eventi.length;
       D.eventi.push(...eventi);
       if (vuota && letto.puntata) D.puntata = String(letto.puntata);
-      // la quota totale Sisal vale solo se ho importato tutti gli eventi
-      if (vuota && letto.quotaTotale && eventi.length === righe.length) D.quotaTotale = String(letto.quotaTotale);
+      // la quota è sempre quella della schedina Sisal (bonus compreso)
+      if (vuota && letto.quotaTotale) D.quotaTotale = String(letto.quotaTotale);
       chiudiModal(); S.view = 'nuova'; render(); window.scrollTo(0, 0);
       toast(`${eventi.length} eventi aggiunti: controlla la puntata e salva`);
     }
@@ -495,7 +515,7 @@ function revisioneImport(letto, righe) {
     const a = e.target.dataset?.r, i = Number(e.target.dataset?.i);
     if (!a || Number.isNaN(i)) return;
     const r = righe[i];
-    if (a === 'scelta') { r.scelta = e.target.value === '' ? '' : Number(e.target.value); r.livello = 'ok'; }
+    if (a === 'scelta') { const v = e.target.value; r.scelta = v === '' || v === 'mano' ? v : Number(v); r.livello = 'ok'; }
     if (a === 'mercato') { r.mercato = e.target.value; r.mercatoDubbio = false; r.sel = opzioni[r.mercato]?.[0] ?? null; }
     if (a === 'sel') r.sel = e.target.value;
     if (a === 'linea') r.linea = e.target.value;
@@ -618,11 +638,13 @@ function menuEvento(sid, i) {
     <div class="muted small">${esc(etichettaSelezione(ev))}${L ? ` · ${L.h}–${L.a}` : ''}${L?.hasStats ? ` · corner ${L.corners}` : ''}</div>
     ${gol ? `<h3>Gol</h3><div class="small">${gol}</div>` : ''}
     <h3>Esito</h3>
-    <p class="muted small">Calcolato in automatico. Correggilo a mano se il bookmaker l'ha refertato diversamente (es. marcatore non entrato = rimborso).</p>
+    <p class="muted small">${ev.fixtureId ? "Calcolato in automatico. Correggilo a mano se il bookmaker l'ha refertato diversamente (es. marcatore non entrato = rimborso)." : 'Questa partita non è seguita in automatico: controlla il risultato e segna tu l\'esito.'}</p>
     <div class="seg">
       <button data-m="vinto">Vinto</button><button data-m="perso">Perso</button><button data-m="nullo">Nullo</button>
     </div>
-    <button class="btn block" data-m="auto" style="margin-top:8px" ${ev.esitoManuale ? '' : 'disabled'}>Torna al calcolo automatico</button>`;
+    ${ev.fixtureId
+      ? `<button class="btn block" data-m="auto" style="margin-top:8px" ${ev.esitoManuale ? '' : 'disabled'}>Torna al calcolo automatico</button>`
+      : `<button class="btn block" data-m="auto" style="margin-top:8px" ${ev.esitoManuale ? '' : 'disabled'}>Rimetti "da verificare"</button>`}`;
   $('#modal-box').onclick = async (e) => {
     const m = e.target.dataset.m; if (!m) return;
     if (m === 'chiudi') return chiudiModal();
