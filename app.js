@@ -51,16 +51,48 @@ function cacheSet(k, d) {
 }
 
 /* ---------- API-Football ---------- */
-// Il contatore si azzera a mezzanotte UTC, come la quota del piano
+// Contatore richieste: il dato vero arriva da /status di API-Football (che non consuma quota).
+// Il conteggio locale serve solo finché /status non risponde. La quota si azzera a mezzanotte UTC.
 const chiaveContatore = () => 'req-' + new Date().toISOString().slice(0, 10);
 function contaRichiesta(rimaste) {
   let n = 0; try { n = Number(localStorage.getItem(chiaveContatore())) || 0; localStorage.setItem(chiaveContatore(), n + 1); } catch {}
-  if (rimaste != null) S.rimaste = Number(rimaste);
-  mostraQuota(n + 1);
+  if (S.quota) S.quota.usate++;                       // stima immediata, poi corretta da /status
+  else if (rimaste != null) S.quota = { usate: 100 - Number(rimaste), limite: 100, stimata: true };
+  mostraQuota();
+  clearTimeout(contaRichiesta._t);
+  contaRichiesta._t = setTimeout(aggiornaContatore, 1500);
 }
-function mostraQuota(n) {
-  if (n == null) { try { n = Number(localStorage.getItem(chiaveContatore())) || 0; } catch { n = 0; } }
-  $('#quota-api').textContent = S.rimaste != null ? `API: ${S.rimaste} rimaste oggi` : `API oggi: ${n}`;
+async function aggiornaContatore() {
+  if (!S.settings.apiKey) return;
+  try {
+    const st = await api('/status', false);
+    const usate = st.requests?.current, limite = st.requests?.limit_day;
+    if (typeof usate === 'number' && typeof limite === 'number') S.quota = { usate, limite, piano: st.subscription?.plan };
+  } catch {}
+  mostraQuota();
+  if (S.user && S.view === 'live') renderLive();
+}
+function rimaste() { return S.quota ? Math.max(0, S.quota.limite - S.quota.usate) : null; }
+// Richieste necessarie per il prossimo aggiornamento live (1 ogni 20 partite iniziate)
+function costoAggiornamento() { return Math.ceil(partiteDaAggiornare().length / 20); }
+function oraAzzeramento() {
+  const d = new Date(); d.setUTCHours(24, 0, 0, 0);
+  return d.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+}
+function mostraQuota() {
+  const el = $('#quota-api');
+  if (!S.quota) {
+    let n = 0; try { n = Number(localStorage.getItem(chiaveContatore())) || 0; } catch {}
+    el.innerHTML = S.settings.apiKey ? `<span class="q-num">${n}</span><span class="q-lbl">richieste oggi</span>` : '';
+    el.className = 'quota-api';
+    return;
+  }
+  const { usate, limite } = S.quota;
+  const perc = Math.min(100, usate / limite * 100);
+  el.className = 'quota-api' + (perc >= 90 ? ' alto' : perc >= 70 ? ' medio' : '');
+  el.title = `Richieste API usate oggi: ${usate} su ${limite}. Si azzera alle ${oraAzzeramento()}.`;
+  el.innerHTML = `<span class="q-num">${usate}<small>/${limite}</small></span>
+    <span class="q-bar"><i style="width:${perc}%"></i></span>`;
 }
 
 async function api(path, conta = true) {
@@ -116,6 +148,14 @@ async function aggiornaLive(manuale = false) {
   if (S.aggiornando || !S.user) return;
   const ids = partiteDaAggiornare();
   if (!ids.length) { if (manuale) toast('Nessuna partita iniziata da aggiornare'); return; }
+  const costo = Math.ceil(ids.length / 20), restano = rimaste();
+  if (restano != null && restano < costo) {
+    // quota finita: niente aggiornamenti automatici, avviso una volta sola
+    if (manuale || !S.avvisoQuota) toast(`Richieste API finite per oggi: si riparte alle ${oraAzzeramento()}`, true);
+    S.avvisoQuota = true;
+    return;
+  }
+  S.avvisoQuota = false;
   S.aggiornando = true; render();
   try {
     const snap = new Map();
@@ -147,15 +187,21 @@ async function aggiornaLive(manuale = false) {
   }
 }
 
+// Minuti tra un aggiornamento e l'altro; 0 = solo manuale
+function minuti() {
+  const v = Number(S.settings.intervallo);
+  return Number.isFinite(v) && v >= 0 ? v : 3;
+}
 function avviaTimer() {
   clearInterval(S.timer);
+  if (!minuti()) return;
   S.timer = setInterval(() => {
     if (document.visibilityState === 'visible') aggiornaLive();
-  }, Math.max(1, Number(S.settings.intervallo) || 3) * 60e3);
+  }, minuti() * 60e3);
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible' || !S.user) return;
-  const scaduto = !S.ultimoAgg || Date.now() - S.ultimoAgg > (Number(S.settings.intervallo) || 3) * 60e3;
+  if (document.visibilityState !== 'visible' || !S.user || !minuti()) return;
+  const scaduto = !S.ultimoAgg || Date.now() - S.ultimoAgg > minuti() * 60e3;
   if (scaduto) aggiornaLive();
 });
 
@@ -177,10 +223,10 @@ onAuthStateChanged(auth, async (user) => {
   S.unsub = onSnapshot(q, (snap) => {
     S.schedine = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     render();
-    if (primo) { primo = false; aggiornaLive(); }
+    if (primo) { primo = false; if (minuti()) aggiornaLive(); }
   }, (e) => toast(e.message, true));
   if (!S.settings.apiKey) S.view = 'impostazioni';
-  avviaTimer(); mostraQuota(); render();
+  avviaTimer(); mostraQuota(); aggiornaContatore(); render();
 });
 
 /* ---------- navigazione ---------- */
@@ -247,13 +293,15 @@ function cardSchedina(s) {
 }
 
 function renderLive() {
+  const costoLive = costoAggiornamento();
   const aperte = S.schedine.filter(s => !statoSchedina(s).chiusa);
   const limite = Date.now() - 2 * 86400e3;
   const recenti = S.schedine.filter(s => statoSchedina(s).chiusa && (s.createdAtMs || 0) > limite).slice(0, 10);
   const agg = S.ultimoAgg ? 'Aggiornato alle ' + new Date(S.ultimoAgg).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }) : 'Non ancora aggiornato';
   $('#view-live').innerHTML = `
     <div class="toolbar">
-      <div><h2>In gioco</h2><div class="muted small">${agg} · ogni ${S.settings.intervallo} min</div></div>
+      <div><h2>In gioco</h2><div class="muted small">${agg} · ${minuti() ? `ogni ${minuti()} min` : 'aggiornamento manuale'}</div>
+        ${costoLive ? `<div class="muted small">Ogni aggiornamento costa ${costoLive} ${costoLive === 1 ? 'richiesta' : 'richieste'}${rimaste() != null ? ` · ne restano ${rimaste()} (≈ ${Math.floor(rimaste() / costoLive)} aggiornamenti)` : ''}</div>` : ''}</div>
       <button class="btn" data-act="aggiorna" ${S.aggiornando ? 'disabled' : ''}>${S.aggiornando ? 'Aggiorno…' : '↻ Aggiorna'}</button>
     </div>
     ${aperte.length ? aperte.map(cardSchedina).join('') : `<div class="empty">Nessuna schedina aperta.<br><br><button class="btn primary" data-act="vai-nuova">Crea una schedina</button></div>`}
@@ -668,8 +716,8 @@ function renderImpostazioni() {
     <input id="i-key" type="password" autocomplete="off" value="${esc(S.settings.apiKey)}" placeholder="Incolla la chiave">
     <p class="muted small">Viene salvata nel tuo account Firebase, non nel codice del sito su GitHub.</p>
     <label>Aggiornamento automatico durante le partite</label>
-    <select id="i-int">${[2, 3, 5, 10].map(m => `<option value="${m}" ${Number(S.settings.intervallo) === m ? 'selected' : ''}>Ogni ${m} minuti</option>`).join('')}</select>
-    <p class="muted small">Con il piano gratuito (100 richieste al giorno) ogni aggiornamento costa 1 richiesta per ogni gruppo di 20 partite in corso, e parte solo se il sito è aperto e c'è almeno una partita iniziata. Con un aggiornamento ogni 3 minuti una partita costa circa 35 richieste.</p>
+    <select id="i-int">${[2, 3, 5, 10, 15, 30, 0].map(m => `<option value="${m}" ${minuti() === m ? 'selected' : ''}>${m ? `Ogni ${m} minuti` : 'Solo manuale (premo io Aggiorna)'}</option>`).join('')}</select>
+    <p class="muted small">Con il piano gratuito (100 richieste al giorno) ogni aggiornamento costa 1 richiesta per ogni gruppo di 20 partite in corso, e parte solo se il sito è aperto e c'è almeno una partita iniziata. Per una fascia di partite di circa 2 ore: ogni 3 minuti ≈ 38 aggiornamenti, ogni 15 minuti ≈ 8. In modalità manuale ogni pressione di "Aggiorna" costa 1 richiesta ogni 20 partite in corso.</p>
     <div class="row" style="margin-top:12px">
       <button class="btn primary grow" id="i-salva">Salva</button>
       <button class="btn grow" id="i-prova">Prova la chiave</button>
@@ -695,7 +743,7 @@ function renderImpostazioni() {
       const st = await api('/status', false); // /status non consuma la quota
       const piano = st.subscription?.plan || '?';
       const usate = st.requests?.current ?? '?', limite = st.requests?.limit_day ?? '?';
-      if (typeof usate === 'number' && typeof limite === 'number') S.rimaste = limite - usate;
+      if (typeof usate === 'number' && typeof limite === 'number') S.quota = { usate, limite, piano };
       mostraQuota();
       let msg = `✓ Chiave valida · piano ${esc(piano)} · richieste oggi ${usate}/${limite}.`;
       try {
