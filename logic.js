@@ -58,6 +58,24 @@ export function snapshot(f) {
   };
 }
 
+/**
+ * Risultato finale preso dall'elenco delle partite del giorno (/fixtures?date=...), senza altre richieste.
+ * Vale solo per partite finite o annullate, e solo per i mercati che usano i gol (non corner e marcatore).
+ */
+export const MERCATI_SOLO_GOL = new Set(['1X2', 'DC', 'UO', 'GGNG']);
+export function snapshotDaElenco(p) {
+  if (!p || p.gh === undefined) return null;                 // elenco salvato con una versione vecchia
+  if (!FINITI.has(p.status) && !ANOMALI.has(p.status)) return null;
+  let h = p.gh ?? 0, a = p.ga ?? 0;
+  if ((p.status === 'AET' || p.status === 'PEN') && p.fth != null) { h = p.fth; a = p.fta; }
+  return {
+    status: p.status, elapsed: p.elapsed ?? null, h, a,
+    golTotali: { h: p.gh ?? 0, a: p.ga ?? 0 },
+    corners: 0, hasStats: false, marcatori: [], golEventi: [],
+    finito: FINITI.has(p.status), daElenco: true, updatedAt: Date.now(),
+  };
+}
+
 function esitoRisultato(h, a) { return h > a ? '1' : h < a ? '2' : 'X'; }
 
 /** Under/Over: l'Over si vince (e l'Under si perde) appena si supera la linea. */

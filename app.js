@@ -2,7 +2,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/fireba
 import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, collection, doc, addDoc, setDoc, getDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { MERCATI, ANOMALI, IN_CORSO, snapshot, valuta, statoSchedina, etichettaSelezione, statistiche } from "./logic.js";
+import { MERCATI, ANOMALI, IN_CORSO, MERCATI_SOLO_GOL, snapshotDaElenco, snapshot, valuta, statoSchedina, etichettaSelezione, statistiche } from "./logic.js";
 import { leggiScreenshot, abbina, SOGLIA_SICURA, SOGLIA_MINIMA } from "./sisal.js";
 
 const fb = initializeApp(firebaseConfig);
@@ -117,10 +117,13 @@ async function api(path, conta = true) {
 
 async function partiteDelGiorno(data, forza = false) {
   const k = 'fx-' + data;
-  if (!forza) { const c = cacheGet(k, 6 * 3600e3); if (c) return c; }
+  // Giorni passati: i risultati non cambiano più. Oggi: elenco valido 15 minuti, così i risultati finali sono freschi.
+  const durata = data < oggi() ? 24 * 3600e3 : data === oggi() ? 15 * 60e3 : 6 * 3600e3;
+  if (!forza) { const c = cacheGet(k, durata); if (c && c[0]?.gh !== undefined) return c; }
   const res = await api(`/fixtures?date=${data}&timezone=${TZ}`);
   const lista = res.map(f => ({
-    id: f.fixture.id, kickoff: f.fixture.date, status: f.fixture.status.short,
+    id: f.fixture.id, kickoff: f.fixture.date, status: f.fixture.status.short, elapsed: f.fixture.status.elapsed,
+    gh: f.goals?.home ?? null, ga: f.goals?.away ?? null, fth: f.score?.fulltime?.home ?? null, fta: f.score?.fulltime?.away ?? null,
     leagueId: f.league.id, league: f.league.name, country: f.league.country,
     homeId: f.teams.home.id, home: f.teams.home.name, awayId: f.teams.away.id, away: f.teams.away.name,
   })).sort((a, b) => a.kickoff.localeCompare(b.kickoff));
@@ -495,7 +498,8 @@ function revisioneImport(letto, righe) {
           : r.cand.find(c => c.partita.id === r.scelta).partita;
         const ev = {
           fixtureId: p.id, kickoff: p.kickoff, league: p.league, home: p.home, away: p.away, homeId: p.homeId, awayId: p.awayId,
-          mercato: r.mercato, sel: r.mercato === 'MARC' ? null : r.sel, quota: r.quota ? Number(r.quota) : null, live: null, esitoManuale: null,
+          mercato: r.mercato, sel: r.mercato === 'MARC' ? null : r.sel, quota: r.quota ? Number(r.quota) : null,
+          live: MERCATI_SOLO_GOL.has(r.mercato) ? snapshotDaElenco(p) : null, esitoManuale: null,
         };
         if (r.mercato === 'UO' || r.mercato === 'CORNER') ev.linea = Number(r.linea);
         if (r.mercato === 'MARC') { ev.giocatore = r.giocatore.trim(); ev.giocatoreId = null; }
@@ -589,7 +593,8 @@ function apriGiocata(p) {
       if (st.mercato === 'MARC' && !st.giocatore.trim()) return toast('Scegli o scrivi il giocatore', true);
       const ev = {
         fixtureId: p.id, kickoff: p.kickoff, league: p.league, home: p.home, away: p.away, homeId: p.homeId, awayId: p.awayId,
-        mercato: st.mercato, sel: st.sel, quota: st.quota ? Number(st.quota) : null, live: null, esitoManuale: null,
+        mercato: st.mercato, sel: st.sel, quota: st.quota ? Number(st.quota) : null,
+        live: MERCATI_SOLO_GOL.has(st.mercato) ? snapshotDaElenco(p) : null, esitoManuale: null,
       };
       if (st.mercato === 'UO') ev.linea = st.linea;
       if (st.mercato === 'CORNER') ev.linea = st.lineaCorner;
@@ -619,7 +624,7 @@ async function salvaSchedina() {
       puntata: Number(D.puntata),
       quotaTotale: Number(D.quotaTotale) || null,
       eventi: D.eventi,
-      stato: 'aperta',
+      stato: statoSchedina({ puntata: D.puntata, quotaTotale: D.quotaTotale, eventi: D.eventi }).stato,
     });
     S.draft = { eventi: [], puntata: '', quotaTotale: '' };
     S.view = 'live'; render(); toast('Schedina salvata');
