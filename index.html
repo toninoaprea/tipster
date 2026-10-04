@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0e1512">
+  <title>Le mie Schedine</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <h1>Schedine<span>live</span></h1>
+    <div id="quota-api" class="quota-api" title="Richieste API usate oggi"></div>
+  </header>
+
+  <main id="app">
+    <section id="login" class="login hidden">
+      <div class="login-box">
+        <h2>Le tue bollette, in tempo reale</h2>
+        <p>Inserisci le giocate e segui ogni evento mentre le partite sono in corso.</p>
+        <button id="btn-login" class="btn primary">Accedi con Google</button>
+      </div>
+    </section>
+
+    <section id="view-live" class="view hidden"></section>
+    <section id="view-nuova" class="view hidden"></section>
+    <section id="view-storico" class="view hidden"></section>
+    <section id="view-impostazioni" class="view hidden"></section>
+  </main>
+
+  <nav id="nav" class="nav hidden">
+    <button data-view="live" class="active"><span class="ico">●</span>Live</button>
+    <button data-view="nuova"><span class="ico">＋</span>Nuova</button>
+    <button data-view="storico"><span class="ico">▤</span>Storico</button>
+    <button data-view="impostazioni"><span class="ico">⚙</span>Impostazioni</button>
+  </nav>
+
+  <div id="modal" class="modal hidden"><div class="modal-box" id="modal-box"></div></div>
+  <div id="toast" class="toast hidden"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
